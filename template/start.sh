@@ -17,6 +17,8 @@ mkdir -p /data
 # 日志模块：构建时从 common 仓库下载到 /opt/startup/log.sh
 #   log <级别> <消息>     只写文件（${LOG_BASE_DIR}/<脚本名>/年/月/日/）
 #   log -f <级别> <消息>  同时打印到控制台，即出现在 docker logs 里
+# 这里的取舍：正常步骤（prepare / once）只进文件，
+#   启动成功留一行 main，失败和重试全部进控制台
 #   级别：debug / success / info / warn / error / fatal
 #   文件落在 ${LOG_BASE_DIR}/<脚本名>/年/月/日/，默认保留 30 个
 #   来源见 install/app.conf 的 LOG_LIB_URL
@@ -66,12 +68,12 @@ fail_start() {
     used=$((used + 1))
     echo "$used" > "$ATTEMPT_FILE"
 
-    log error "${name} 失败（exit ${code}）"
+    log -f error "${name} 失败（exit ${code}）"
     if [ "$used" -le "$STARTUP_RETRY" ]; then
-        log warn "第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起"
+        log -f warn "第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起"
         exit "$code"
     fi
-    log error "不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart"
+    log -f error "不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart"
     exec sleep infinity
 }
 
@@ -104,5 +106,5 @@ fi
 #    走到这里说明启动成功，清掉失败计数
 # ------------------------------------------------------------
 rm -f "$ATTEMPT_FILE"
-log info "main"
+log -f success "main"
 exec bash "${DIR}/main.sh"

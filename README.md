@@ -174,21 +174,35 @@ docker compose up -d
 
 ## 日志
 
-启动脚本用 `log` 代替 `echo`，默认**只写文件**，不进 `docker logs`：
+启动脚本用 `log` 代替 `echo`，分两档：
+
+| 内容 | 去哪 |
+|---|---|
+| 正常步骤（`prepare` / `once`） | 只写文件 |
+| 启动成功那一行 `main`、失败原因、重试次数 | 文件 + `docker logs` |
 
 ```bash
-log info "prepare"           # 只写文件
-log warn "端口被占用"
-log error "prepare 失败"
+log info "prepare"                  # 只进文件
+log -f success "main"               # 也进 docker logs（每次启动一行）
+log -f error "prepare 失败（exit 1）"
 ```
 
-想同时打到控制台（即出现在 `docker logs` 里）才加 `-f`：
+规则不是按级别自动判断，而是**调用时显式写 `-f`**：写了就代表「这条出问题时必须一眼看到」。所以正常启动时 `docker logs` 只有一行：
 
-```bash
-log -f error "这条也要进 docker logs"
+```
+$ docker logs opencode-cs
+[2026-10-28 05:31:14] [start] 🎉 main
 ```
 
-原因：`log.sh` 判断「输出是不是终端」，容器里 stdout 是管道，不加 `-f` 就只写文件。这样 `docker logs` 里只剩主进程自己的输出，不会和启动脚本的日志混在一起。
+失败时才把原因和重试情况带出来：
+
+```
+[2026-10-28 05:31:17] [prepare] ❌ 端口 4099 被占用
+[2026-10-28 05:31:17] [start] ❌ prepare 失败（exit 1）
+[2026-10-28 05:31:17] [start] ❌ 不再重试（STARTUP_RETRY=0）；修复后执行 docker compose restart
+```
+
+自己写 `prepare.sh` / `once.sh` 时同理：正常步骤用 `log info`，出错用 `log -f error`。命令本身失败时（如 `mkdir` 报错），bash 的 stderr 会直接进 `docker logs`，不用额外处理。
 
 | 级别 | 用途 |
 |---|---|

@@ -14,4 +14,5 @@ set -euo pipefail
 # 示例：把环境变量落到 /data，供主进程读取
 # [ -z "${APP_PASSWORD:-}" ] || printf '%s\n' "$APP_PASSWORD" > /data/password
 
+# 正常步骤只进文件；出错时用 log -f error "..." 才会进 docker logs
 log info "完成"

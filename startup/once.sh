@@ -15,4 +15,5 @@ set -euo pipefail
 #     cp /workspace/config.example.yml /data/app/config.yml
 # fi
 
+# 正常步骤只进文件；出错时用 log -f error "..." 才会进 docker logs
 log info "完成"
