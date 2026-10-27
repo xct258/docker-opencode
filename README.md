@@ -54,10 +54,10 @@
 
 | `STARTUP_RETRY` | 失败时 |
 |---|---|
-| `0`（默认） | 打印失败脚本和退出码，然后**停住**（`sleep infinity`），不再重启 |
+| `0`（默认） | 记录失败脚本和退出码，然后**停住**（`sleep infinity`），不再重启 |
 | `N > 0` | 未超限时退出，让 restart 策略重新拉起；超过 N 次后停住 |
 
-失败日志长这样：
+失败时的日志写进文件（`data/logs/...`），长这样：
 
 ```
 [2026-10-28 05:24:13] [prepare] ❌ 端口 4099 被占用
@@ -71,10 +71,10 @@
 docker compose restart
 ```
 
-容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看日志里有没有 `main`：
+容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看最新的 `start` 日志里有没有 `main`：
 
 ```bash
-docker logs <容器名> | tail -3
+tail -3 "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
 ```
 
 `STARTUP_RETRY` 只管**启动阶段**；主进程跑起来之后再崩溃，仍由 `restart: unless-stopped` 拉起。
@@ -174,22 +174,28 @@ docker compose up -d
 
 ## 日志
 
-启动脚本用 `log` 代替 `echo`，一条日志同时写文件和打印：
+启动脚本用 `log` 代替 `echo`，默认**只写文件**，不进 `docker logs`：
 
 ```bash
-log -f info "prepare"        # ✅ [时间] [start] prepare
-log -f warn "端口被占用"
-log -f error "prepare 失败"
+log info "prepare"           # 只写文件
+log warn "端口被占用"
+log error "prepare 失败"
 ```
+
+想同时打到控制台（即出现在 `docker logs` 里）才加 `-f`：
+
+```bash
+log -f error "这条也要进 docker logs"
+```
+
+原因：`log.sh` 判断「输出是不是终端」，容器里 stdout 是管道，不加 `-f` 就只写文件。这样 `docker logs` 里只剩主进程自己的输出，不会和启动脚本的日志混在一起。
 
 | 级别 | 用途 |
 |---|---|
 | `debug` / `success` / `info` | 正常流程 |
 | `warn` / `error` / `fatal` | 需要人看的问题 |
 
-**必须带 `-f`**，否则只写文件。原因：`log.sh` 判断「输出是不是终端」，容器里 stdout 是管道，不加 `-f` 就什么都不打印。
-
-文件位置（跟着数据卷走，重建容器不丢）：
+文件位置（跟着数据卷走，重建容器不丢；compose 把 `./data` 挂到了 `/data`）：
 
 ```
 /data/logs/<脚本名>/2026/10/28/<脚本名>_HHMMSS_<pid>.log
@@ -198,21 +204,17 @@ log -f error "prepare 失败"
 
 每个脚本每次启动一个文件，`LOG_MAX_FILES`（默认 30）控制每个脚本保留多少个，超出的自动删。
 
+在宿主机上看最新的启动日志：
+
+```bash
+tail -f "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
+```
+
 | 环境变量 | 默认值 | 作用 |
 |---|---|---|
 | `LOG_BASE_DIR` | `/data/logs` | 日志根目录（compose 里已设） |
 | `LOG_MAX_FILES` | `30` | 每个脚本保留的日志文件数 |
 | `LOG_COLOR` | `auto` | `auto` 只在终端上色；`never` 永不上色；`always` 强制上色 |
-
-`docker logs` 里看到的也是同一份内容（带时间戳），但它是 Docker 自己的 json 文件、**默认不轮转**。想要上限就在 compose 里加：
-
-```yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
 
 日志模块不在本仓库，构建时从 `xct258/common` 按提交 SHA 下载（见 `install/app.conf` 的 `LOG_LIB_URL`）。改了上游要同步更新那个 SHA，否则构建的还是旧版本。
 

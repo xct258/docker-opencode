@@ -15,8 +15,8 @@ mkdir -p /data
 
 # ------------------------------------------------------------
 # 日志模块：构建时从 common 仓库下载到 /opt/startup/log.sh
-#   log <级别> <消息>     写文件 + 打印（非终端时不打印，见 log.sh）
-#   log -f <级别> <消息>  强制打印，容器里用它才能进 docker logs
+#   log <级别> <消息>     只写文件（${LOG_BASE_DIR}/<脚本名>/年/月/日/）
+#   log -f <级别> <消息>  同时打印到控制台，即出现在 docker logs 里
 #   级别：debug / success / info / warn / error / fatal
 #   文件落在 ${LOG_BASE_DIR}/<脚本名>/年/月/日/，默认保留 30 个
 #   来源见 install/app.conf 的 LOG_LIB_URL
@@ -66,12 +66,12 @@ fail_start() {
     used=$((used + 1))
     echo "$used" > "$ATTEMPT_FILE"
 
-    log -f error "${name} 失败（exit ${code}）"
+    log error "${name} 失败（exit ${code}）"
     if [ "$used" -le "$STARTUP_RETRY" ]; then
-        log -f warn "第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起"
+        log warn "第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起"
         exit "$code"
     fi
-    log -f error "不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart"
+    log error "不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart"
     exec sleep infinity
 }
 
@@ -84,7 +84,7 @@ run_step() {
 # ------------------------------------------------------------
 # 1. 启动前的准备：每次启动都执行
 # ------------------------------------------------------------
-log -f info "prepare"
+log info "prepare"
 run_step prepare "${DIR}/prepare.sh"
 
 # ------------------------------------------------------------
@@ -92,9 +92,9 @@ run_step prepare "${DIR}/prepare.sh"
 #    要重新执行就删掉标记文件；标记在 /data 里，随数据卷保留
 # ------------------------------------------------------------
 if [ -f "$ONCE_MARK" ]; then
-    log -f info "once 已执行过，跳过"
+    log info "once 已执行过，跳过"
 else
-    log -f info "once"
+    log info "once"
     run_step once "${DIR}/once.sh"
     touch "$ONCE_MARK"
 fi
@@ -104,5 +104,5 @@ fi
 #    走到这里说明启动成功，清掉失败计数
 # ------------------------------------------------------------
 rm -f "$ATTEMPT_FILE"
-log -f info "main"
+log info "main"
 exec bash "${DIR}/main.sh"

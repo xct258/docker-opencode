@@ -15,4 +15,4 @@ set -euo pipefail
 #     cp /workspace/config.example.yml /data/app/config.yml
 # fi
 
-log -f info "完成"
+log info "完成"
