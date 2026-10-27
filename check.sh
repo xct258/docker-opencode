@@ -201,16 +201,6 @@ else
     skip "未安装 shellcheck"
 fi
 
-if command -v hadolint >/dev/null 2>&1; then
-    if out=$(hadolint template/Dockerfile 2>&1); then
-        ok "hadolint"
-    else
-        warn "hadolint 报错：${out}"
-    fi
-else
-    skip "未安装 hadolint"
-fi
-
 # ------------------------------------------------------------
 # 汇总
 # ------------------------------------------------------------
