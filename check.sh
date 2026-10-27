@@ -131,14 +131,19 @@ else
     bad "ENTRYPOINT 指向 ${entry:-未定义}，但 Dockerfile 没有把 start.sh 安装到该路径"
 fi
 
-# 日志模块：Dockerfile 的下载位置必须与 start.sh 的引用路径一致
-log_dest=$(sed -n 's#.*fetch "${LOG_LIB_URL}" \([^;]*\);.*#\1#p' template/Dockerfile | head -1)
-if [ -z "$log_dest" ]; then
-    bad "Dockerfile 里找不到下载 LOG_LIB_URL 到 /opt/startup/log.sh 的语句"
-elif [ "$log_dest" = "${start_dir}/log.sh" ] && grep -qF '${DIR}/log.sh' template/start.sh; then
-    ok "log.sh 下载到 ${log_dest}，start.sh 从 \${DIR}/log.sh 引入"
+# 日志模块：Dockerfile 从 app.conf 取出 LOG_LIB_URL，下载到 start.sh 引用的路径
+# 不能用 `. app.conf`：RUN 跑在 /bin/sh（dash）下，app.conf 里有 bash 数组会直接语法错误
+if grep -q '^[[:space:]]*\. /tmp/app.conf' template/Dockerfile; then
+    bad "Dockerfile 里 source 了 app.conf：dash 不认数组语法，应改用 sed 取需要的键"
 else
-    bad "log.sh 下载到 ${log_dest}，但 start.sh 没有从 \${DIR}/log.sh（DIR=${start_dir}）引入"
+    log_dest=$(sed -n 's#.*fetch "\$log_url" \([^;]*\);.*#\1#p' template/Dockerfile | head -1)
+    if [ -z "$log_dest" ]; then
+        bad "Dockerfile 里找不到从 app.conf 取 LOG_LIB_URL 并下载 log.sh 的语句"
+    elif [ "$log_dest" = "${start_dir}/log.sh" ] && grep -qF '${DIR}/log.sh' template/start.sh; then
+        ok "log.sh 下载到 ${log_dest}，start.sh 从 \${DIR}/log.sh 引入"
+    else
+        bad "log.sh 下载到 ${log_dest}，但 start.sh 没有从 \${DIR}/log.sh（DIR=${start_dir}）引入"
+    fi
 fi
 if [ -z "${LOG_LIB_URL:-}" ]; then
     warn "app.conf 的 LOG_LIB_URL 为空，镜像里不会有 log.sh（启动脚本会退化成只用 echo）"

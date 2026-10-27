@@ -37,7 +37,6 @@ RUN set -eux; \
         }; \
     }; \
     fetch "${REPO_URL}/install/app.conf" /tmp/app.conf; \
-    . /tmp/app.conf; \
     if ! wget -q --tries=3 --timeout=30 -O /tmp/custom-install.sh "${REPO_URL}/install/custom-install.sh"; then \
         rm -f /tmp/custom-install.sh; \
     fi; \
@@ -45,8 +44,9 @@ RUN set -eux; \
     for f in prepare.sh once.sh main.sh; do \
         fetch "${REPO_URL}/startup/${f}" "/opt/startup/${f}"; \
     done; \
-    if [ -n "${LOG_LIB_URL:-}" ]; then \
-        fetch "${LOG_LIB_URL}" /opt/startup/log.sh; \
+    log_url=$(sed -n 's/^LOG_LIB_URL=//p' /tmp/app.conf | head -1 | tr -d '"'); \
+    if [ -n "$log_url" ]; then \
+        fetch "$log_url" /opt/startup/log.sh; \
     fi; \
     fetch "${REPO_URL}/install/install.sh" /tmp/install.sh; \
     chmod +x /tmp/install.sh; \
