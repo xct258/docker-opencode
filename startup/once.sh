@@ -6,10 +6,13 @@
 # ============================================================
 set -euo pipefail
 
+# 日志模块（构建时下载到 /opt/startup/log.sh）
+. "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 # 示例：首次启动时生成配置
 # mkdir -p /data/app
 # if [ ! -f /data/app/config.yml ]; then
 #     cp /workspace/config.example.yml /data/app/config.yml
 # fi
 
-echo "[once] 完成"
+log -f info "完成"

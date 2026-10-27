@@ -60,9 +60,9 @@
 失败日志长这样：
 
 ```
-[start] prepare
-[start] prepare 失败（exit 1）
-[start] 不再重试（STARTUP_RETRY=0）；修复后执行 docker compose restart
+[2026-10-28 05:24:13] [prepare] ❌ 端口 4099 被占用
+[2026-10-28 05:24:13] [start] ❌ prepare 失败（exit 1）
+[2026-10-28 05:24:13] [start] ❌ 不再重试（STARTUP_RETRY=0）；修复后执行 docker compose restart
 ```
 
 计数在 `/data/.startup-attempts`，启动成功后自动删除。修好配置后：
@@ -71,7 +71,7 @@
 docker compose restart
 ```
 
-容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看日志里有没有 `[start] main`：
+容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看日志里有没有 `main`：
 
 ```bash
 docker logs <容器名> | tail -3
@@ -166,11 +166,55 @@ docker compose up -d
 | 路径 | 内容 | 生命周期 |
 |---|---|---|
 | `/opt/start.sh` | 启动入口（`ENTRYPOINT`） | 常驻 |
-| `/opt/startup/*.sh` | `prepare.sh` / `once.sh` / `main.sh` | 常驻 |
+| `/opt/startup/*.sh` | `prepare.sh` / `once.sh` / `main.sh` / `log.sh` | 常驻 |
 | `/tmp/app.conf`、`/tmp/custom-install.sh`、`/tmp/install.sh` | 构建期配置与安装脚本 | 安装完即删 |
 | `/data` | 数据卷挂载点 | 随卷保留 |
 
 所以 `working_dir` 可以放心指向 `/workspace`、`/app` 等任意目录，不会被镜像自带文件占用。
+
+## 日志
+
+启动脚本用 `log` 代替 `echo`，一条日志同时写文件和打印：
+
+```bash
+log -f info "prepare"        # ✅ [时间] [start] prepare
+log -f warn "端口被占用"
+log -f error "prepare 失败"
+```
+
+| 级别 | 用途 |
+|---|---|
+| `debug` / `success` / `info` | 正常流程 |
+| `warn` / `error` / `fatal` | 需要人看的问题 |
+
+**必须带 `-f`**，否则只写文件。原因：`log.sh` 判断「输出是不是终端」，容器里 stdout 是管道，不加 `-f` 就什么都不打印。
+
+文件位置（跟着数据卷走，重建容器不丢）：
+
+```
+/data/logs/<脚本名>/2026/10/28/<脚本名>_HHMMSS_<pid>.log
+# 例：/data/logs/start/2026/10/28/start_052428_17052.log
+```
+
+每个脚本每次启动一个文件，`LOG_MAX_FILES`（默认 30）控制每个脚本保留多少个，超出的自动删。
+
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `LOG_BASE_DIR` | `/data/logs` | 日志根目录（compose 里已设） |
+| `LOG_MAX_FILES` | `30` | 每个脚本保留的日志文件数 |
+| `LOG_COLOR` | `auto` | `auto` 只在终端上色；`never` 永不上色；`always` 强制上色 |
+
+`docker logs` 里看到的也是同一份内容（带时间戳），但它是 Docker 自己的 json 文件、**默认不轮转**。想要上限就在 compose 里加：
+
+```yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+日志模块不在本仓库，构建时从 `xct258/common` 按提交 SHA 下载（见 `install/app.conf` 的 `LOG_LIB_URL`）。改了上游要同步更新那个 SHA，否则构建的还是旧版本。
 
 ## 环境变量
 
@@ -202,6 +246,7 @@ exec my-server --port "${PORT:-8080}"
 | `INSTALL_7Z` | 快捷安装 7-Zip（`true` / `false`，自动按架构下载最新版） |
 | `PYTHON_PACKAGES` | Python 依赖（pip 包，**一行一个**）；非空时自动安装 Python3 并 pip 安装 |
 | `INSTALL_CUSTOM` | 是否执行 `install/custom-install.sh`（`true` / `false`），构建时执行一次 |
+| `LOG_LIB_URL` | 日志模块 `log.sh` 的下载地址，固定到提交 SHA；留空则镜像里不带日志模块 |
 
 - `PYTHON_PACKAGES` 非空时会自动安装 `python3`、`pip3`，并提供 `python` 命令
 
@@ -215,7 +260,7 @@ exec my-server --port "${PORT:-8080}"
 
 - 构建流水线在 `.github/workflows/build-image.yml`，读取 `install/app.conf` 的配置，通常无需修改
 - 构建前会自动校验：必备文件齐全、`install/` 与 `startup/` 下的脚本语法正确、`DOCKERACC` / `DOCKERPWD` secrets 已配置，校验失败会给出明确错误
-- 构建时不用 `COPY`，而是由 CI 生成 `REPO_URL`（当前提交的 raw 地址，固定在 `github.sha`，避免分支地址的 CDN 缓存拿到旧文件），Dockerfile 用 `wget` 下载 `install/app.conf` / `install/custom-install.sh` / `install/install.sh` 到 `/tmp`（安装完删除）、`startup/*.sh` 到 `/opt/startup`、`template/start.sh` 到 `/opt/start.sh`（`custom-install.sh` 缺失时自动跳过）
+- 构建时不用 `COPY`，而是由 CI 生成 `REPO_URL`（当前提交的 raw 地址，固定在 `github.sha`，避免分支地址的 CDN 缓存拿到旧文件），Dockerfile 用 `wget` 下载 `install/app.conf` / `install/custom-install.sh` / `install/install.sh` 到 `/tmp`（安装完删除）、`startup/*.sh` 到 `/opt/startup`、`template/start.sh` 到 `/opt/start.sh`、`LOG_LIB_URL` 指向的 `log.sh` 到 `/opt/startup/log.sh`（`custom-install.sh` 缺失时自动跳过）
 - 构建**完全不使用缓存**（CI 里 `no-cache: true`），每次构建都全新执行，保证 wget 下载到最新文件
 - 因此**仓库需要是公开的**（private 仓库的 raw 地址需要鉴权，wget 无法直接访问）
 - 基础镜像固定为 `xct258/debian-cn`（Debian 系）；要换基础镜像需改 `template/Dockerfile` 的 `FROM`，且新镜像要带 `apt-get`

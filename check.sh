@@ -131,6 +131,21 @@ else
     bad "ENTRYPOINT 指向 ${entry:-未定义}，但 Dockerfile 没有把 start.sh 安装到该路径"
 fi
 
+# 日志模块：Dockerfile 的下载位置必须与 start.sh 的引用路径一致
+log_dest=$(sed -n 's#.*fetch "${LOG_LIB_URL}" \([^;]*\);.*#\1#p' template/Dockerfile | head -1)
+if [ -z "$log_dest" ]; then
+    bad "Dockerfile 里找不到下载 LOG_LIB_URL 到 /opt/startup/log.sh 的语句"
+elif [ "$log_dest" = "${start_dir}/log.sh" ] && grep -qF '${DIR}/log.sh' template/start.sh; then
+    ok "log.sh 下载到 ${log_dest}，start.sh 从 \${DIR}/log.sh 引入"
+else
+    bad "log.sh 下载到 ${log_dest}，但 start.sh 没有从 \${DIR}/log.sh（DIR=${start_dir}）引入"
+fi
+if [ -z "${LOG_LIB_URL:-}" ]; then
+    warn "app.conf 的 LOG_LIB_URL 为空，镜像里不会有 log.sh（启动脚本会退化成只用 echo）"
+else
+    ok "LOG_LIB_URL 已配置（固定到提交 SHA）"
+fi
+
 # ------------------------------------------------------------
 # 5. docker-compose.yml 与 app.conf 的镜像名是否一致
 # ------------------------------------------------------------

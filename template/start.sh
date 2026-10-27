@@ -14,6 +14,22 @@ ONCE_MARK=/data/.startup-once.done
 mkdir -p /data
 
 # ------------------------------------------------------------
+# 日志模块：构建时从 common 仓库下载到 /opt/startup/log.sh
+#   log <级别> <消息>     写文件 + 打印（非终端时不打印，见 log.sh）
+#   log -f <级别> <消息>  强制打印，容器里用它才能进 docker logs
+#   级别：debug / success / info / warn / error / fatal
+#   文件落在 ${LOG_BASE_DIR}/<脚本名>/年/月/日/，默认保留 30 个
+#   来源见 install/app.conf 的 LOG_LIB_URL
+# ------------------------------------------------------------
+LOG_BASE_DIR=${LOG_BASE_DIR:-/data/logs}
+export LOG_BASE_DIR
+if [ ! -f "${DIR}/log.sh" ]; then
+    echo "[start] 缺少 ${DIR}/log.sh（检查 install/app.conf 的 LOG_LIB_URL）" >&2
+    exit 1
+fi
+. "${DIR}/log.sh"
+
+# ------------------------------------------------------------
 # 0. 补全 PATH
 #    安装器（opencode / bun / uv 等）把可执行文件放在 $HOME 下的 bin 目录，
 #    只把该目录写进 ~/.bashrc / ~/.profile；容器启动用的是非交互 shell，
@@ -50,12 +66,12 @@ fail_start() {
     used=$((used + 1))
     echo "$used" > "$ATTEMPT_FILE"
 
-    echo "[start] ${name} 失败（exit ${code}）" >&2
+    log -f error "${name} 失败（exit ${code}）"
     if [ "$used" -le "$STARTUP_RETRY" ]; then
-        echo "[start] 第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起" >&2
+        log -f warn "第 ${used}/${STARTUP_RETRY} 次重试：等待 restart 策略重新拉起"
         exit "$code"
     fi
-    echo "[start] 不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart" >&2
+    log -f error "不再重试（STARTUP_RETRY=${STARTUP_RETRY}）；修复后执行 docker compose restart"
     exec sleep infinity
 }
 
@@ -68,7 +84,7 @@ run_step() {
 # ------------------------------------------------------------
 # 1. 启动前的准备：每次启动都执行
 # ------------------------------------------------------------
-echo "[start] prepare"
+log -f info "prepare"
 run_step prepare "${DIR}/prepare.sh"
 
 # ------------------------------------------------------------
@@ -76,9 +92,9 @@ run_step prepare "${DIR}/prepare.sh"
 #    要重新执行就删掉标记文件；标记在 /data 里，随数据卷保留
 # ------------------------------------------------------------
 if [ -f "$ONCE_MARK" ]; then
-    echo "[start] once 已执行过，跳过"
+    log -f info "once 已执行过，跳过"
 else
-    echo "[start] once"
+    log -f info "once"
     run_step once "${DIR}/once.sh"
     touch "$ONCE_MARK"
 fi
@@ -88,5 +104,5 @@ fi
 #    走到这里说明启动成功，清掉失败计数
 # ------------------------------------------------------------
 rm -f "$ATTEMPT_FILE"
-echo "[start] main"
+log -f info "main"
 exec bash "${DIR}/main.sh"

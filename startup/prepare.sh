@@ -6,7 +6,12 @@
 # ============================================================
 set -euo pipefail
 
+# 日志模块（构建时下载到 /opt/startup/log.sh）
+#   log -f <级别> <消息>：写文件（/data/logs）并打印到 docker logs
+#   级别：debug / success / info / warn / error / fatal
+. "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 # 示例：把环境变量落到 /data，供主进程读取
 # [ -z "${APP_PASSWORD:-}" ] || printf '%s\n' "$APP_PASSWORD" > /data/password
 
-echo "[prepare] 完成"
+log -f info "完成"
