@@ -154,15 +154,6 @@ else
     ok "container_name=${compose_name}（不校验唯一性）"
 fi
 
-# 健康检查用的失败标记必须与 start.sh 里的一致（整串比较，避免前缀误判）
-fail_mark=$(sed -n 's/^FAIL_MARK=//p' template/start.sh)
-hc_mark=$(sed -n 's/.*test ! -f \([^"]*\).*/\1/p' docker-compose.yml | head -1)
-if [ -n "$fail_mark" ] && [ "$hc_mark" = "$fail_mark" ]; then
-    ok "healthcheck 失败标记 ${fail_mark} 与 start.sh 一致"
-else
-    bad "start.sh 的 FAIL_MARK=${fail_mark:-未定义} ≠ compose healthcheck 的 ${hc_mark:-未定义}"
-fi
-
 # ------------------------------------------------------------
 # 6. YAML 解析
 # ------------------------------------------------------------

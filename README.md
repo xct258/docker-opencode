@@ -71,28 +71,11 @@
 docker compose restart
 ```
 
-容器停住时，`start.sh` 会写 `/data/.startup-failed`，compose 的 healthcheck 据此把状态标成 `unhealthy`，不会伪装成健康：
+容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看日志里有没有 `[start] main`：
 
 ```bash
-$ docker compose ps
-NAME   STATUS
-app    Up 2 minutes (unhealthy)
-
-$ docker logs app | tail -1
-[start] 不再重试（STARTUP_RETRY=0）；修复后执行 docker compose restart
+docker logs <容器名> | tail -3
 ```
-
-healthcheck 的定义在 `docker-compose.yml`：
-
-```yaml
-    healthcheck:
-      test: ["CMD-SHELL", "test ! -f /data/.startup-failed"]
-      start_period: 60s
-```
-
-只写这两行：`test` 是判据，`start_period` 是启动阶段的宽限；`interval` / `timeout` / `retries` 用 Docker 默认值（30s / 30s / 3 次）足够。
-
-启动成功时标记被删除、状态恢复 `healthy`；`start_period` 给 `prepare.sh` / `once.sh` 留出执行时间，期间不做判定。
 
 `STARTUP_RETRY` 只管**启动阶段**；主进程跑起来之后再崩溃，仍由 `restart: unless-stopped` 拉起。
 
@@ -135,7 +118,6 @@ CI 的 Validate 步骤调用的是同一个脚本，本地过了线上基本不�
 - `install/app.conf` 必填项（`IMAGE_REPO` / `PLATFORMS`）与开关取值（`true` / `false`）
 - Dockerfile 里 `wget` 的下载路径在仓库中是否真的存在、`startup/` 脚本列表是否一致
 - 三处路径是否对得上：`start.sh` 的 `DIR`、`install.sh` 的 `CONF`、`ENTRYPOINT` 指向的文件，都必须和 Dockerfile 里的下载位置一致
-- compose 的 `healthcheck` 用的失败标记是否和 `start.sh` 的 `FAIL_MARK` 一致
 - `docker-compose.yml` 的镜像名是否与 `install/app.conf` 的 `IMAGE_REPO:IMAGE_TAG` 一致（`container_name` 只提醒不校验）
 - `docker-compose.yml` 与 workflow 的 YAML 解析
 - 装了 `shellcheck` 时顺带检查（只提示，不影响结果）

@@ -7,12 +7,6 @@ services:
     # 想用桥接网络就注释掉这行，再打开下面的 ports
     network_mode: host
     restart: unless-stopped
-    # 启动失败时 start.sh 会写 /data/.startup-failed 并停住，容器因此显示 Up (unhealthy)
-    # interval / timeout / retries 用默认值（30s / 30s / 3 次），不用写
-    healthcheck:
-      test: ["CMD-SHELL", "test ! -f /data/.startup-failed"]
-      # 给 prepare/once 留时间，这段时间内不判定
-      start_period: 60s
     # 工作目录默认是 /；需要固定就取消注释（挂载代码后用 /workspace 之类）
     # working_dir: /workspace
     # 需要传给容器的变量，在这里加一行即可：KEY: 值
