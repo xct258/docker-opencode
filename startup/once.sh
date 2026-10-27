@@ -1,0 +1,15 @@
+#!/bin/bash
+# ============================================================
+# 只执行一次：第一次启动时执行，成功后写标记 /data/.startup-once.done
+#   适合：初始化数据目录、生成配置文件、建表/迁移这类不能重复执行的操作
+#   想再执行一次：删掉 /data/.startup-once.done 后重启容器
+# ============================================================
+set -euo pipefail
+
+# 示例：首次启动时生成配置
+# mkdir -p /data/app
+# if [ ! -f /data/app/config.yml ]; then
+#     cp /workspace/config.example.yml /data/app/config.yml
+# fi
+
+echo "[once] 完成"
