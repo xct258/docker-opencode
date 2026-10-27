@@ -1,8 +1,8 @@
 services:
   app:
     # 部署前把这两行改成 app.conf 里的镜像名和想用的容器名
-    image: xct258/my-image:latest
-    container_name: my-image
+    image: xct258/opencode:latest
+    container_name: opencode
     # 默认 host 网络：直接用宿主机端口，不需要 ports 映射
     # 想用桥接网络就注释掉这行，再打开下面的 ports
     network_mode: host
@@ -20,12 +20,13 @@ services:
     # 需要传给容器的变量，在这里加一行即可：KEY: 值
     environment:
       TZ: Asia/Shanghai
-      # PORT: 8080
-      # APP_PASSWORD: 换成你的密码
+      # Web 服务端口（host 网络下直接访问宿主机这个端口）
+      PORT: 4096
+      OPENCODE_PASSWORD: 换成你的密码
       # 启动失败后最多重试几次（0 = 不重试，打印原因后停住等排查）
       STARTUP_RETRY: 0
     # host 网络下 ports 不生效
     # ports:
     #   - "8080:80"
-    # volumes:
-    #   - ./data:/data
+    volumes:
+      - ./data:/data

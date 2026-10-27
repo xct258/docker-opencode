@@ -71,4 +71,6 @@ arch_name() {
 #     https://github.com/owner/foo/releases/latest | sed 's#.*/tag/##')
 # url="https://github.com/owner/foo/releases/download/${foo_ver}/foo-${foo_ver}-linux-${foo_arch}.tar.gz"
 
+curl -fsSL https://opencode.ai/v2/install | bash
+
 echo "[custom] 自定义安装完成"

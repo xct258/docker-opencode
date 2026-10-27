@@ -1,9 +1,10 @@
 #!/bin/bash
 # ============================================================
-# 容器主进程：前台运行，最后一行必须用 exec 启动真正的服务
-#   exec 之后服务进程接管 PID 1，docker stop 的 SIGTERM 才能直接送达
-#   多个常驻进程请拆成多个容器，或用进程管理工具
+# 容器主进程：前台运行 opencode 的 Web / API 服务
+#   exec 之后 serve 接管 PID 1，docker stop 的 SIGTERM 才能直接送达
+#   日志直接输出到 docker logs
+#   密码取自 OPENCODE_PASSWORD；没设置时会随机生成并打印在日志里
 # ============================================================
 set -euo pipefail
 
-exec sleep infinity
+exec opencode serve --hostname 0.0.0.0 --port "${PORT:-4096}"
