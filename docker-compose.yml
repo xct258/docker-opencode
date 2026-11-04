@@ -26,6 +26,8 @@ services:
       # UPDATE_RESTART: 1
       # 日志文件目录（log.sh 写入，跟着数据卷走；不设就写进镜像内的 /opt/startup/logs）
       LOG_BASE_DIR: /data/logs
+      # 服务日志（默认 /data/logs/opencode/opencode.log）
+      # SERVICE_LOG_KEEP_DAYS: 15
       # 每个脚本保留多少个日志文件，默认 30
       # LOG_MAX_FILES: 30
     # host 网络下 ports 不生效

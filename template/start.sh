@@ -242,5 +242,5 @@ if [ "$UPDATE_INTERVAL_DAYS" -gt 0 ] && [ -f "${DIR}/update.sh" ]; then
     update_loop &
 fi
 
-log -f success "main（prepare/update/once 完成，启动 main.sh）"
+log info "main（prepare/update/once 完成，启动 main.sh）"
 exec bash "${DIR}/main.sh"

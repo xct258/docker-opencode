@@ -253,20 +253,26 @@ docker compose up -d
 | 内容 | 去哪 |
 |---|---|
 | 正常步骤（`prepare` / `once`） | 只写文件 |
-| 进入服务阶段的那一行 `main`（不代表 `main.sh` 里的命令已经成功）、失败原因、重试次数、更新重启 | 文件 + `docker logs` |
+| 启动摘要（服务已启动、访问端口、密码） | 文件 + `docker logs`（只打这一次） |
+| 更新重启、异常退出 | 文件 + `docker logs` |
+| 服务进程自己的 stdout/stderr | 只写 `SERVICE_LOG`（不进 `docker logs`） |
 
 ```bash
 log info "prepare"                  # 只进文件
-log -f success "main"               # 也进 docker logs（每次启动一行）
-log -f error "prepare 失败（exit 1）"
+log info "main"                     # 只进文件
+log -f error "prepare 失败（exit 1）" # 进 docker logs
 ```
 
-规则不是按级别自动判断，而是**调用时显式写 `-f`**：写了就代表「这条出问题时必须一眼看到」。所以正常启动时 `docker logs` 只有一行（`main` 在启动 `main.sh` 之前打印）：
+规则不是按级别自动判断，而是**调用时显式写 `-f`**：写了就代表「这条出问题时必须一眼看到」。正常启动时 `docker logs` 只打印一次启动摘要：
 
 ```
 $ docker logs opencode-cs
-[2026-10-28 05:31:14] [start] 🎉 main（prepare/update/once 完成，启动 main.sh）
+[2026-10-28 05:31:15] [main] 🎉 服务已启动（PID 123）
+[2026-10-28 05:31:15] [main] ✅ 访问端口: 8080
+[2026-10-28 05:31:15] [main] ✅ 密码: ********
 ```
+
+之后 `docker logs` 不再输出；只有更新重启（`重启服务（应用更新）`）或异常退出（`服务异常退出（exit N）`）时才会再加一行。
 
 失败时才把原因和重试情况带出来：
 
@@ -282,6 +288,30 @@ $ docker logs opencode-cs
 |---|---|
 | `debug` / `success` / `info` | 正常流程 |
 | `warn` / `error` / `fatal` | 需要人看的问题 |
+
+### 服务日志
+
+`main.sh` 里启动服务时把输出重定向到 `SERVICE_LOG`，不要让它直接打到 `docker logs`：
+
+```bash
+start_service() {
+    my-service --port "${PORT:-8080}" >> "$SERVICE_LOG" 2>&1 &
+    svc_pid=$!
+}
+```
+
+`main.sh` 每天 00:00 把当天日志 copytruncate 归档为 `service.log-YYYY-MM-DD`，只保留最新 N 天：
+
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `SERVICE_LOG` | `/data/logs/service/service.log` | 服务 stdout/stderr（当天） |
+| `SERVICE_LOG_KEEP_DAYS` | `15` | 保留最近多少天的归档 |
+| `SERVICE_PORT` | 空 | 启动摘要里打印访问端口 |
+| `SERVICE_PASSWORD` | 空 | 启动摘要里打印密码（有才打） |
+
+`docker logs` 只在启动时打印一次摘要，之后只在更新重启/异常退出时输出，所以不需要再给 `docker logs` 配大小限制。
+
+### 启动脚本日志
 
 文件位置（容器内 `/data/logs`；挂载了 `./data:/data` 才会落到宿主机，且重建容器不丢。默认 compose 没挂载，日志随容器删除）：
 
