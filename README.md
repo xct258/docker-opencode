@@ -14,7 +14,7 @@
 │   ├── prepare.sh        # 每次启动都执行
 │   ├── update.sh         # 可选：每次启动检查服务更新（失败不阻塞）
 │   ├── once.sh           # 只执行一次
-│   └── main.sh           # 服务进程（由 start.sh 监管，可单独重启）
+│   └── main.sh           # 服务管理脚本（自定义 start / stop）
 ├── template/             # 固定模板，无需修改
 │   ├── Dockerfile
 │   └── start.sh          # 依次调用 startup/ 下的三个脚本
@@ -27,16 +27,20 @@
 
 ## 启动流程
 
-容器启动时 `template/start.sh` 按顺序执行 `startup/` 下的脚本，然后留在前台当 supervisor（`main.sh` 是它的子进程，不再接管 PID 1）：
+容器启动时 `template/start.sh` 按顺序执行 `startup/` 下的脚本，最后 `exec main.sh`：
 
 | 脚本 | 执行时机 | 放什么 |
 |---|---|---|
 | `prepare.sh` | **每次**启动（含 `docker restart`） | 设密码、改配置、建目录等可重复执行的操作 |
 | `update.sh` | **每次**启动（可选，`prepare` 之后）；`UPDATE_INTERVAL_DAYS > 0` 时运行期按天定时执行 | 检查服务有没有新版本，有就更新（失败默认不阻塞） |
 | `once.sh` | **只执行一次**（标记文件 `/data/.startup-once.done`） | 初始化数据、生成配置、建表/迁移等不能重复执行的操作 |
-| `main.sh` | 每次启动，作为服务子进程运行 | 真正的启动命令，最后一行用 `exec` |
+| `main.sh` | 启动时 `exec`，之后一直常驻 | 服务管理：`start_service` / `stop_service` 两个函数 |
 
-`start.sh` 会一直保持运行：更新后只重启 `main.sh`，容器和 `prepare` / `once` 都不受影响。`main.sh` 自己退出（崩溃或正常结束）时 `start.sh` 跟着退出，容器由 restart 策略拉起，行为和以前一致。
+`main.sh` 是常驻的服务管理脚本：
+
+- 更新装好后收到 `USR1` → 调 `stop_service`，再 `start_service`（只重启服务，容器不动）
+- `docker stop` 收到 `TERM` → 调 `stop_service`，然后退出
+- 服务自己崩溃/退出 → `main.sh` 跟着退出，容器由 restart 策略拉起
 
 - `once.sh` 成功后才写标记；想重新执行就删掉 `/data/.startup-once.done` 再重启
 - 标记在 `/data` 里，跟着数据卷走；没挂卷时等同于每个容器一次
@@ -45,19 +49,18 @@
 
 ## 自动更新（启动时 + 定时，可选）
 
-每次启动先跑 `startup/update.sh`：查当前版本 → 查最新版本 → 有更新就装。设置 `UPDATE_INTERVAL_DAYS` 之后，运行期间还会每隔 N 天在后台再跑一次。模板不知道你的服务怎么升级，所以只负责调度，逻辑写在 `startup/update.sh` 里（仓库自带空实现，以及 opencode / GitHub Releases 两个示例，取消注释即可用）。
+每次启动先跑 `startup/update.sh`：查当前版本 → 查最新版本 → 有更新就装。设置 `UPDATE_INTERVAL_DAYS` 之后，运行期间每隔 N 天在 `UPDATE_CHECK_AT`（默认凌晨 `04:00`）再检查一次。模板不知道你的服务怎么升级，所以只负责调度，逻辑写在 `startup/update.sh` 里（仓库自带空实现，以及 opencode / GitHub Releases 两个示例，取消注释即可用）。
 
-**装到新版本后不会立刻重启**：先记下时间，到下一个 `UPDATE_RESTART_AT`（默认凌晨 `04:00`）再重启 `main.sh`。装本身是瞬时、原子替换，不影响正在跑的旧进程，所以提前装好没有副作用。
+**检查到新版本会立即重启服务**：`update.sh` 装好后返回 10，后台循环直接给 `main.sh` 发 `USR1`，由它调用 `stop_service` / `start_service`。因为检查本身就在凌晨 4 点，所以重启也发生在低峰期。
 
 | 环境变量 | 默认 | 作用 |
 |---|---|---|
 | `UPDATE_ON_START` | `1` | 启动时是否检查；`0` / `false` / `off` 关闭 |
-| `UPDATE_INTERVAL_DAYS` | `0` | 运行期定时检查间隔（**天**）；`0` = 不启用，只在启动时查一次 |
+| `UPDATE_INTERVAL_DAYS` | `0` | 运行期每多少**天**检查一次；`0` = 不启用，只在启动时查一次 |
+| `UPDATE_CHECK_AT` | `04:00` | 定时检查时间，`HH:MM`（容器本地时间，配合 `TZ`） |
 | `UPDATE_TIMEOUT` | `60` | 单次检查最长秒数（`0` = 不限时），超时按失败处理 |
 | `UPDATE_STRICT` | `0` | `1` 时**启动时**检查失败按启动失败处理（走「启动失败与重试」） |
-| `UPDATE_RESTART` | `1` | 装到新版本后按 `UPDATE_RESTART_AT` 重启 `main.sh`；`0` = 只装不重启 |
-| `UPDATE_RESTART_AT` | `04:00` | 重启时间，`HH:MM`（容器本地时间，配合 `TZ`） |
-| `UPDATE_RESTART_GRACE` | `10` | 重启服务时等它退出的秒数，超时强杀；`0` = 不强制 |
+| `UPDATE_RESTART` | `1` | 装到新版本后立即重启 `main.sh`；`0` = 只装不重启 |
 
 默认行为：**没网、接口变了、装失败，都只打一条 warn，旧版本继续跑**，不会因为更新检查把服务弄挂。
 
@@ -65,11 +68,10 @@
     environment:
       # UPDATE_ON_START: 1
       # UPDATE_INTERVAL_DAYS: 1    # 每天查一次
+      # UPDATE_CHECK_AT: "04:00"   # 凌晨 4 点检查（注意加引号）
       # UPDATE_TIMEOUT: 60
       # UPDATE_STRICT: 0
-      # UPDATE_RESTART: 1          # 装到新版本后定时重启（默认开）
-      # UPDATE_RESTART_AT: "04:00" # 凌晨 4 点重启（注意加引号）
-      # UPDATE_RESTART_GRACE: 10   # 旧进程不退出的强杀宽限期
+      # UPDATE_RESTART: 1          # 有更新立即重启（默认开）
 ```
 
 `update.sh` 的退出码约定：
@@ -77,7 +79,7 @@
 | 退出码 | 含义 | 模板怎么处理 |
 |---|---|---|
 | `0` | 没变化 / 已是最新 | 继续 |
-| `10` | **装了新版本** | 启动时直接生效；定时检查时安排到下一个 `UPDATE_RESTART_AT` 重启 |
+| `10` | **装了新版本** | 启动时直接生效；定时检查时立即重启服务 |
 | 其它 | 失败（没网、接口变了） | 启动时默认只告警；定时检查只告警 |
 
 其它约定：
@@ -85,16 +87,16 @@
 - 正常检查用 `log info`（只进文件）；**真的更新了**才用 `log -f success`（进 `docker logs`）
 - 网络请求加 `--max-time`，没网时尽快跳过
 - 运行期替换二进制用 `mv` 原子替换（`mktemp` + `mv`），直接覆盖正在执行的文件会 `ETXTBSY`
-- 多实例共用 `/data` 时模板已用 `flock` 串行，脚本里不用再加锁
+- 多个实例不要共用 `/data`（更新和日志都在里面）
 - 定时循环是常驻进程，日志会一直追加到同一个文件（按文件数的 `LOG_MAX_FILES` 管不到它），长期运行注意日志大小
 
-⚠️ **装完新版本到下个 `UPDATE_RESTART_AT` 才重启（容器不动）**：Linux 上替换正在运行的二进制不会影响已启动的进程（内存里还是旧的），所以定时检查装完后只写一个重启时间（`/data/.restart-at`），到点由后台调度器通知 supervisor，由它停掉旧 `main.sh` 再拉起新的。容器一直保持运行，`prepare` / `once` 不重跑，定时检查也不中断。
+⚠️ **检查在 `UPDATE_CHECK_AT`，装完立即重启（容器不动）**：Linux 上替换正在运行的二进制不会影响已启动的进程（内存里还是旧的），所以检查到新版本、装完后马上给 `main.sh` 发 `USR1`，由它调用 `stop_service` / `start_service`。容器一直保持运行，`prepare` / `once` 不重跑，定时循环也不中断。
 
-- 重启时间是容器本地时间，靠 `TZ` 决定；`UPDATE_RESTART_AT: "04:00"` 记得加引号（YAML 会把 `04:00` 当成数字）
-- 已经排了重启时间时又装了新版本，沿用原来更早的时间，不会往后推
-- `main.sh` 里的服务要能处理 `SIGTERM`；超过 `UPDATE_RESTART_GRACE` 秒还没退出会强杀
+- 检查时间是容器本地时间，靠 `TZ` 决定；`UPDATE_CHECK_AT: "04:00"` 记得加引号（YAML 会把 `04:00` 当成数字）
+- 间隔 N 天表示「每 N 天的这个时间检查一次」，不是从容器启动时间开始数
+- `stop_service` 要确保服务真的停掉（有专用停止命令就直接用，别只 `kill` 一下）
 - 想「只装、下次重启容器再生效」就设 `UPDATE_RESTART=0`
-- `main.sh` 自己退出（崩溃/正常结束）时，`start.sh` 跟着退出，容器由 restart 策略拉起，和以前一致
+- `main.sh` 自己退出（崩溃/正常结束）时容器结束，由 restart 策略拉起
 
 ⚠️ **更新装进的是容器可写层**：`docker restart` 还在，但容器重建（`docker compose down/up`、换镜像）会回到镜像里构建时的版本，下次启动会重新检查。要永久保留就把二进制装到挂载卷（如 `/data/bin`），再用 `EXTRA_PATH_DIRS` 加进 `PATH`。
 
@@ -142,7 +144,7 @@ docker compose restart
 docker exec <容器名> tail -3 "$(docker exec <容器名> sh -c 'ls -t /data/logs/start/*/*/*/*.log | head -1')"
 ```
 
-`STARTUP_RETRY` 只管**启动阶段**；`main.sh` 跑起来之后再崩溃/退出，`start.sh` 会跟着退出，仍由 `restart: unless-stopped` 拉起。
+`STARTUP_RETRY` 只管**启动阶段**；`main.sh` 跑起来之后再崩溃/退出，容器会结束，仍由 `restart: unless-stopped` 拉起。
 
 ## 一次性准备
 
@@ -200,7 +202,7 @@ docker compose up -d
     container_name: my-image
 ```
 
-`start.sh` 是容器主进程，`main.sh` 作为子进程运行。compose 里默认开了 `init: true`（由 tini 当 PID 1），用来回收服务留下的孤儿进程；用 `docker run` 部署时记得加 `--init`。
+`start.sh` 最后会 `exec main.sh`，所以 `main.sh` 是容器主进程。如果服务会留下孤儿进程，可以自己加 `init: true`（或 `docker run --init`）让 tini 回收；不加也能正常运行。
 
 默认使用 **host 网络**（`network_mode: host`），容器直接用宿主机端口，`ports:` 映射不生效。需要独立网络时注释掉 `network_mode`，再打开 `ports`：
 
@@ -318,7 +320,10 @@ tail -f "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
 
 ```bash
 # startup/main.sh
-exec my-server --port "${PORT:-8080}"
+start_service() {
+    my-server --port "${PORT:-8080}" &
+    svc_pid=$!
+}
 ```
 
 `docker compose config` 可以直接检查环境变量有没有拼错。
@@ -338,7 +343,7 @@ exec my-server --port "${PORT:-8080}"
 
 - `PYTHON_PACKAGES` 非空时会自动安装 `python3`、`pip3`，并提供 `python` 命令
 
-- 多个常驻进程请拆成多个容器，或用进程管理工具；`main.sh` 必须前台运行（最后一行 `exec`），`start.sh` 才能把 `SIGTERM` 转发给真正的服务进程并正常重启
+- 多个常驻进程请拆成多个容器，或用进程管理工具；`start_service` 启动的服务要能被 `stop_service` 停掉，更新时才能只重启服务
 - apt / pip 装不了的东西写进 `install/custom-install.sh`，脚本内可用 `${TARGETARCH}` 区分 `amd64` / `arm64`
 - 项目命名不是 `amd64` / `arm64` 时用脚本里的 `arch_name` 映射，如 `arch_name x64 aarch64`
 - `custom-install.sh` 里装完依赖记得清理临时文件，减小镜像体积

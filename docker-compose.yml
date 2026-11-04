@@ -7,34 +7,23 @@ services:
     # 想用桥接网络就注释掉这行，再打开下面的 ports
     network_mode: host
     restart: unless-stopped
-    # 用 tini 当 PID 1 回收孤儿进程；start.sh 作为 supervisor 管理 main.sh
-    init: true
-    # 给 supervisor 转发 SIGTERM 留出时间（默认 10s 会和它的强杀宽限期撞上）
-    stop_grace_period: 15s
     # 工作目录默认是 /；需要固定就取消注释（挂载代码后用 /workspace 之类）
     # working_dir: /workspace
     # 需要传给容器的变量，在这里加一行即可：KEY: 值
     environment:
-      TZ: Asia/Shanghai
       # Web 服务端口（host 网络下直接访问宿主机这个端口）
       PORT: 4096
       OPENCODE_PASSWORD: 换成你的密码
-      # 启动失败后最多重试几次（0 = 不重试，打印原因后停住等排查）
-      STARTUP_RETRY: 0
       # 启动时检查 opencode 更新（有 update.sh 时默认开启）
       # UPDATE_ON_START: 1
-      # 运行期每天检查一次；装到新版本后只重启 main.sh，容器保持运行
+      # 运行期每天 04:00 检查一次；装到新版本后只重启 main.sh，容器保持运行
       UPDATE_INTERVAL_DAYS: 1
       # 单次检查最长秒数（默认 60）
       # UPDATE_TIMEOUT: 60
       # 1 = 启动时更新失败按启动失败处理（默认 0：只告警，旧版本继续启动）
       # UPDATE_STRICT: 0
-      # 1 = 装到新版本后在 UPDATE_RESTART_AT 重启服务（默认 1）
+      # 1 = 装到新版本后立即重启服务（默认 1）
       # UPDATE_RESTART: 1
-      # 重启时间，容器本地时间（默认 04:00；YAML 里要加引号）
-      UPDATE_RESTART_AT: "04:00"
-      # 重启服务时等它退出的秒数（默认 10，0 = 不强制）
-      # UPDATE_RESTART_GRACE: 10
       # 日志文件目录（log.sh 写入，跟着数据卷走；不设就写进镜像内的 /opt/startup/logs）
       LOG_BASE_DIR: /data/logs
       # 每个脚本保留多少个日志文件，默认 30
