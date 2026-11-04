@@ -14,6 +14,11 @@ services:
       # Web 服务端口（host 网络下直接访问宿主机这个端口）
       PORT: 4096
       OPENCODE_PASSWORD: 换成你的密码
+      # GitHub 令牌：有的话启动时配置 git 凭据，容器里可以直接 push
+      # GITHUB_TOKEN: ghp_xxx
+      # git 提交身份（可选）
+      # GIT_USER_NAME: opencode
+      # GIT_USER_EMAIL: opencode@users.noreply.github.com
       # 启动时检查 opencode 更新（有 update.sh 时默认开启）
       # UPDATE_ON_START: 1
       # 运行期每天 04:00 检查一次；装到新版本后只重启 main.sh，容器保持运行
