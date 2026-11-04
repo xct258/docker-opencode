@@ -44,6 +44,9 @@ RUN set -eux; \
     for f in prepare.sh once.sh main.sh; do \
         fetch "${REPO_URL}/startup/${f}" "/opt/startup/${f}"; \
     done; \
+    if ! wget -q --tries=3 --timeout=30 -O /opt/startup/update.sh "${REPO_URL}/startup/update.sh"; then \
+        rm -f /opt/startup/update.sh; \
+    fi; \
     log_url=$(sed -n 's/^LOG_LIB_URL=//p' /tmp/app.conf | head -1 | tr -d '"'); \
     if [ -n "$log_url" ]; then \
         fetch "$log_url" /opt/startup/log.sh; \

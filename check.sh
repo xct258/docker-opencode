@@ -94,11 +94,23 @@ while read -r p; do
     [ -n "$p" ] || continue
     # 带变量的路径（如 startup/${f}）在下面单独校验
     case "$p" in *'${'*) continue ;; esac
+    # 可选文件：Dockerfile 下载失败会跳过，仓库里没有也算正常
+    case "$p" in
+        startup/update.sh)
+            if [ -f "$p" ]; then
+                ok "可选下载 $p"
+            else
+                warn "可选文件 $p 不存在，启动时自动更新会跳过"
+            fi
+            continue
+            ;;
+    esac
     if [ -f "$p" ]; then ok "下载 $p"; else bad "Dockerfile 下载的 $p 在仓库中不存在"; fi
 done < <(grep -o '\${REPO_URL}/[^" ]*' template/Dockerfile | sed 's#\${REPO_URL}/##')
 
 dl_names=$(sed -n 's/.*for f in \(.*\); do.*/\1/p' template/Dockerfile | xargs -n1 2>/dev/null | sort)
-repo_names=$(ls startup/*.sh 2>/dev/null | xargs -n1 basename 2>/dev/null | sort)
+# update.sh 是可选脚本，不参与「必备 startup 列表」比对
+repo_names=$(ls startup/*.sh 2>/dev/null | xargs -n1 basename 2>/dev/null | grep -vx 'update.sh' | sort)
 if [ "$dl_names" = "$repo_names" ]; then
     ok "startup 列表一致：$(echo "$repo_names" | tr '\n' ' ')"
 else
@@ -146,9 +158,16 @@ else
     fi
 fi
 if [ -z "${LOG_LIB_URL:-}" ]; then
-    warn "app.conf 的 LOG_LIB_URL 为空，镜像里不会有 log.sh（启动脚本会退化成只用 echo）"
+    bad "LOG_LIB_URL 为空：镜像里没有 log.sh，容器启动会直接失败（start.sh exit 1）"
 else
     ok "LOG_LIB_URL 已配置（固定到提交 SHA）"
+fi
+
+# 自动更新：Dockerfile 可选下载 update.sh，start.sh 用 ${DIR}/update.sh 调度
+if grep -qF 'startup/update.sh' template/Dockerfile && grep -qF '${DIR}/update.sh' template/start.sh; then
+    ok "自动更新入口一致：startup/update.sh -> \${DIR}/update.sh"
+else
+    bad "自动更新入口不一致：Dockerfile 需下载 startup/update.sh，start.sh 需调用 \${DIR}/update.sh"
 fi
 
 # ------------------------------------------------------------

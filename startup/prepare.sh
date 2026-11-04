@@ -11,7 +11,7 @@ set -euo pipefail
 #   级别：debug / success / info / warn / error / fatal
 . "$(dirname "${BASH_SOURCE[0]}")/log.sh"
 
-# 示例：把环境变量落到 /data，供主进程读取
+# 示例：把环境变量落到 /data，供服务读取
 # [ -z "${APP_PASSWORD:-}" ] || printf '%s\n' "$APP_PASSWORD" > /data/password
 
 # 正常步骤只进文件；出错时用 log -f error "..." 才会进 docker logs

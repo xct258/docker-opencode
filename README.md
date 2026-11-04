@@ -12,8 +12,9 @@
 │   └── custom-install.sh # 可选：apt / pip 之外的操作
 ├── startup/              # 运行时：启动流程
 │   ├── prepare.sh        # 每次启动都执行
+│   ├── update.sh         # 可选：每次启动检查服务更新（失败不阻塞）
 │   ├── once.sh           # 只执行一次
-│   └── main.sh           # 容器主进程
+│   └── main.sh           # 服务进程（由 start.sh 监管，可单独重启）
 ├── template/             # 固定模板，无需修改
 │   ├── Dockerfile
 │   └── start.sh          # 依次调用 startup/ 下的三个脚本
@@ -26,17 +27,78 @@
 
 ## 启动流程
 
-容器启动时 `template/start.sh` 按顺序执行 `startup/` 下的三个脚本：
+容器启动时 `template/start.sh` 按顺序执行 `startup/` 下的脚本，然后留在前台当 supervisor（`main.sh` 是它的子进程，不再接管 PID 1）：
 
 | 脚本 | 执行时机 | 放什么 |
 |---|---|---|
 | `prepare.sh` | **每次**启动（含 `docker restart`） | 设密码、改配置、建目录等可重复执行的操作 |
+| `update.sh` | **每次**启动（可选，`prepare` 之后）；`UPDATE_INTERVAL_DAYS > 0` 时运行期按天定时执行 | 检查服务有没有新版本，有就更新（失败默认不阻塞） |
 | `once.sh` | **只执行一次**（标记文件 `/data/.startup-once.done`） | 初始化数据、生成配置、建表/迁移等不能重复执行的操作 |
-| `main.sh` | 每次启动，作为容器主进程 | 真正的启动命令，最后一行用 `exec` |
+| `main.sh` | 每次启动，作为服务子进程运行 | 真正的启动命令，最后一行用 `exec` |
+
+`start.sh` 会一直保持运行：更新后只重启 `main.sh`，容器和 `prepare` / `once` 都不受影响。`main.sh` 自己退出（崩溃或正常结束）时 `start.sh` 跟着退出，容器由 restart 策略拉起，行为和以前一致。
 
 - `once.sh` 成功后才写标记；想重新执行就删掉 `/data/.startup-once.done` 再重启
 - 标记在 `/data` 里，跟着数据卷走；没挂卷时等同于每个容器一次
-- 任一脚本失败（非 0 退出）容器就不会启动，日志里会打印**哪个脚本失败、退出码多少**
+- `update.sh` 失败默认只告警、不阻塞启动（`UPDATE_STRICT=1` 时才按启动失败处理）
+- 其余脚本失败（非 0 退出）容器就不会启动，日志里会打印**哪个脚本失败、退出码多少**
+
+## 自动更新（启动时 + 定时，可选）
+
+每次启动先跑 `startup/update.sh`：查当前版本 → 查最新版本 → 有更新就装。设置 `UPDATE_INTERVAL_DAYS` 之后，运行期间还会每隔 N 天在后台再跑一次。模板不知道你的服务怎么升级，所以只负责调度，逻辑写在 `startup/update.sh` 里（仓库自带空实现，以及 opencode / GitHub Releases 两个示例，取消注释即可用）。
+
+**装到新版本后不会立刻重启**：先记下时间，到下一个 `UPDATE_RESTART_AT`（默认凌晨 `04:00`）再重启 `main.sh`。装本身是瞬时、原子替换，不影响正在跑的旧进程，所以提前装好没有副作用。
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `UPDATE_ON_START` | `1` | 启动时是否检查；`0` / `false` / `off` 关闭 |
+| `UPDATE_INTERVAL_DAYS` | `0` | 运行期定时检查间隔（**天**）；`0` = 不启用，只在启动时查一次 |
+| `UPDATE_TIMEOUT` | `60` | 单次检查最长秒数（`0` = 不限时），超时按失败处理 |
+| `UPDATE_STRICT` | `0` | `1` 时**启动时**检查失败按启动失败处理（走「启动失败与重试」） |
+| `UPDATE_RESTART` | `1` | 装到新版本后按 `UPDATE_RESTART_AT` 重启 `main.sh`；`0` = 只装不重启 |
+| `UPDATE_RESTART_AT` | `04:00` | 重启时间，`HH:MM`（容器本地时间，配合 `TZ`） |
+| `UPDATE_RESTART_GRACE` | `10` | 重启服务时等它退出的秒数，超时强杀；`0` = 不强制 |
+
+默认行为：**没网、接口变了、装失败，都只打一条 warn，旧版本继续跑**，不会因为更新检查把服务弄挂。
+
+```yaml
+    environment:
+      # UPDATE_ON_START: 1
+      # UPDATE_INTERVAL_DAYS: 1    # 每天查一次
+      # UPDATE_TIMEOUT: 60
+      # UPDATE_STRICT: 0
+      # UPDATE_RESTART: 1          # 装到新版本后定时重启（默认开）
+      # UPDATE_RESTART_AT: "04:00" # 凌晨 4 点重启（注意加引号）
+      # UPDATE_RESTART_GRACE: 10   # 旧进程不退出的强杀宽限期
+```
+
+`update.sh` 的退出码约定：
+
+| 退出码 | 含义 | 模板怎么处理 |
+|---|---|---|
+| `0` | 没变化 / 已是最新 | 继续 |
+| `10` | **装了新版本** | 启动时直接生效；定时检查时安排到下一个 `UPDATE_RESTART_AT` 重启 |
+| 其它 | 失败（没网、接口变了） | 启动时默认只告警；定时检查只告警 |
+
+其它约定：
+
+- 正常检查用 `log info`（只进文件）；**真的更新了**才用 `log -f success`（进 `docker logs`）
+- 网络请求加 `--max-time`，没网时尽快跳过
+- 运行期替换二进制用 `mv` 原子替换（`mktemp` + `mv`），直接覆盖正在执行的文件会 `ETXTBSY`
+- 多实例共用 `/data` 时模板已用 `flock` 串行，脚本里不用再加锁
+- 定时循环是常驻进程，日志会一直追加到同一个文件（按文件数的 `LOG_MAX_FILES` 管不到它），长期运行注意日志大小
+
+⚠️ **装完新版本到下个 `UPDATE_RESTART_AT` 才重启（容器不动）**：Linux 上替换正在运行的二进制不会影响已启动的进程（内存里还是旧的），所以定时检查装完后只写一个重启时间（`/data/.restart-at`），到点由后台调度器通知 supervisor，由它停掉旧 `main.sh` 再拉起新的。容器一直保持运行，`prepare` / `once` 不重跑，定时检查也不中断。
+
+- 重启时间是容器本地时间，靠 `TZ` 决定；`UPDATE_RESTART_AT: "04:00"` 记得加引号（YAML 会把 `04:00` 当成数字）
+- 已经排了重启时间时又装了新版本，沿用原来更早的时间，不会往后推
+- `main.sh` 里的服务要能处理 `SIGTERM`；超过 `UPDATE_RESTART_GRACE` 秒还没退出会强杀
+- 想「只装、下次重启容器再生效」就设 `UPDATE_RESTART=0`
+- `main.sh` 自己退出（崩溃/正常结束）时，`start.sh` 跟着退出，容器由 restart 策略拉起，和以前一致
+
+⚠️ **更新装进的是容器可写层**：`docker restart` 还在，但容器重建（`docker compose down/up`、换镜像）会回到镜像里构建时的版本，下次启动会重新检查。要永久保留就把二进制装到挂载卷（如 `/data/bin`），再用 `EXTRA_PATH_DIRS` 加进 `PATH`。
+
+> 只想要「镜像本身更新」的场景不该用这个：重新构建/拉取镜像更干净。这个功能适合发布频繁、又不想每次重新出镜像的 CLI 服务。
 
 ## 启动失败与重试
 
@@ -48,6 +110,8 @@
     environment:
       # 启动失败后最多重试几次，0 = 不重试
       STARTUP_RETRY: 0
+      # 每次重试前等几秒再退出（默认 5），避免立即重启刷屏
+      # STARTUP_RETRY_DELAY: 5
 ```
 
 `template/start.sh` 的逻辑：
@@ -55,9 +119,9 @@
 | `STARTUP_RETRY` | 失败时 |
 |---|---|
 | `0`（默认） | 记录失败脚本和退出码，然后**停住**（`sleep infinity`），不再重启 |
-| `N > 0` | 未超限时退出，让 restart 策略重新拉起；超过 N 次后停住 |
+| `N > 0` | 等 `STARTUP_RETRY_DELAY` 秒（默认 5）后退出，让 restart 策略重新拉起；超过 N 次后停住 |
 
-失败时的日志写进文件（`data/logs/...`），长这样：
+失败时的日志写进文件（容器内 `/data/logs/...`；宿主机要看 `data/logs/...` 需挂载 `./data`，见「部署」），长这样：
 
 ```
 [2026-10-28 05:24:13] [prepare] ❌ 端口 4099 被占用
@@ -71,13 +135,14 @@
 docker compose restart
 ```
 
-容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否成功，看最新的 `start` 日志里有没有 `main`：
+容器停住时状态仍是 `Up`（进程是 `sleep infinity`），因为让它一直退出只会触发重启循环。判断启动是否走到服务阶段，看最新的 `start` 日志里有没有 `main`（这一行在启动 `main.sh` 前打印，只表示准备阶段完成；`main.sh` 里的命令是否真的起来了，以它自己的输出为准）：
 
 ```bash
-tail -3 "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
+# 需要挂载 ./data:/data，否则日志在容器内，宿主机的 data/logs 是空的
+docker exec <容器名> tail -3 "$(docker exec <容器名> sh -c 'ls -t /data/logs/start/*/*/*/*.log | head -1')"
 ```
 
-`STARTUP_RETRY` 只管**启动阶段**；主进程跑起来之后再崩溃，仍由 `restart: unless-stopped` 拉起。
+`STARTUP_RETRY` 只管**启动阶段**；`main.sh` 跑起来之后再崩溃/退出，`start.sh` 会跟着退出，仍由 `restart: unless-stopped` 拉起。
 
 ## 一次性准备
 
@@ -115,8 +180,8 @@ CI 的 Validate 步骤调用的是同一个脚本，本地过了线上基本不�
 
 - 必备文件是否齐全
 - `install/`、`startup/`、`template/` 下脚本的语法
-- `install/app.conf` 必填项（`IMAGE_REPO` / `PLATFORMS`）与开关取值（`true` / `false`）
-- Dockerfile 里 `wget` 的下载路径在仓库中是否真的存在、`startup/` 脚本列表是否一致
+- `install/app.conf` 必填项（`IMAGE_REPO` / `IMAGE_TAG` / `PLATFORMS` / 非空的 `LOG_LIB_URL`）与开关取值（`true` / `false`）
+- Dockerfile 里 `wget` 的下载路径在仓库中是否真的存在（`update.sh` 除外，它是可选文件）、`startup/` 脚本列表是否一致
 - 三处路径是否对得上：`start.sh` 的 `DIR`、`install.sh` 的 `CONF`、`ENTRYPOINT` 指向的文件，都必须和 Dockerfile 里的下载位置一致
 - `docker-compose.yml` 的镜像名是否与 `install/app.conf` 的 `IMAGE_REPO:IMAGE_TAG` 一致（`container_name` 只提醒不校验）
 - `docker-compose.yml` 与 workflow 的 YAML 解析
@@ -135,25 +200,32 @@ docker compose up -d
     container_name: my-image
 ```
 
+`start.sh` 是容器主进程，`main.sh` 作为子进程运行。compose 里默认开了 `init: true`（由 tini 当 PID 1），用来回收服务留下的孤儿进程；用 `docker run` 部署时记得加 `--init`。
+
 默认使用 **host 网络**（`network_mode: host`），容器直接用宿主机端口，`ports:` 映射不生效。需要独立网络时注释掉 `network_mode`，再打开 `ports`：
 
 ```yaml
     # network_mode: host
     ports:
       - "8080:80"
+```
+
+**数据目录默认没有挂载。** `/data` 里是 `once` 标记、重试计数和日志，不挂卷时它们随容器删除而丢失，重建容器后 `once.sh` 会再执行一次。需要保留就取消注释：
+
+```yaml
     volumes:
       - ./data:/data
 ```
 
 ## 工作目录
 
-镜像里不固定 `WORKDIR`，容器主进程的默认工作目录是 `/`。需要固定时在 compose 里取消注释：
+镜像里不固定 `WORKDIR`，容器默认的工作目录是 `/`。需要固定时在 compose 里取消注释：
 
 ```yaml
     # working_dir: /workspace
 ```
 
-`working_dir` 同时决定 `docker exec` 进去的落点和主进程继承的 cwd。挂载代码目录时配套使用：
+`working_dir` 同时决定 `docker exec` 进去的落点和 `start.sh` / `main.sh` 继承的 cwd。挂载代码目录时配套使用：
 
 ```yaml
     working_dir: /workspace
@@ -166,9 +238,9 @@ docker compose up -d
 | 路径 | 内容 | 生命周期 |
 |---|---|---|
 | `/opt/start.sh` | 启动入口（`ENTRYPOINT`） | 常驻 |
-| `/opt/startup/*.sh` | `prepare.sh` / `once.sh` / `main.sh` / `log.sh` | 常驻 |
+| `/opt/startup/*.sh` | `prepare.sh` / `update.sh` / `once.sh` / `main.sh` / `log.sh` | 常驻 |
 | `/tmp/app.conf`、`/tmp/custom-install.sh`、`/tmp/install.sh` | 构建期配置与安装脚本 | 安装完即删 |
-| `/data` | 数据卷挂载点 | 随卷保留 |
+| `/data` | 数据卷挂载点 | 挂载 `./data` 时随卷保留；默认 compose 未挂载，随容器层丢失 |
 
 所以 `working_dir` 可以放心指向 `/workspace`、`/app` 等任意目录，不会被镜像自带文件占用。
 
@@ -179,7 +251,7 @@ docker compose up -d
 | 内容 | 去哪 |
 |---|---|
 | 正常步骤（`prepare` / `once`） | 只写文件 |
-| 启动成功那一行 `main`、失败原因、重试次数 | 文件 + `docker logs` |
+| 进入服务阶段的那一行 `main`（不代表 `main.sh` 里的命令已经成功）、失败原因、重试次数、更新重启 | 文件 + `docker logs` |
 
 ```bash
 log info "prepare"                  # 只进文件
@@ -187,11 +259,11 @@ log -f success "main"               # 也进 docker logs（每次启动一行）
 log -f error "prepare 失败（exit 1）"
 ```
 
-规则不是按级别自动判断，而是**调用时显式写 `-f`**：写了就代表「这条出问题时必须一眼看到」。所以正常启动时 `docker logs` 只有一行：
+规则不是按级别自动判断，而是**调用时显式写 `-f`**：写了就代表「这条出问题时必须一眼看到」。所以正常启动时 `docker logs` 只有一行（`main` 在启动 `main.sh` 之前打印）：
 
 ```
 $ docker logs opencode-cs
-[2026-10-28 05:31:14] [start] 🎉 main
+[2026-10-28 05:31:14] [start] 🎉 main（prepare/update/once 完成，启动 main.sh）
 ```
 
 失败时才把原因和重试情况带出来：
@@ -209,7 +281,7 @@ $ docker logs opencode-cs
 | `debug` / `success` / `info` | 正常流程 |
 | `warn` / `error` / `fatal` | 需要人看的问题 |
 
-文件位置（跟着数据卷走，重建容器不丢；compose 把 `./data` 挂到了 `/data`）：
+文件位置（容器内 `/data/logs`；挂载了 `./data:/data` 才会落到宿主机，且重建容器不丢。默认 compose 没挂载，日志随容器删除）：
 
 ```
 /data/logs/<脚本名>/2026/10/28/<脚本名>_HHMMSS_<pid>.log
@@ -218,7 +290,7 @@ $ docker logs opencode-cs
 
 每个脚本每次启动一个文件，`LOG_MAX_FILES`（默认 30）控制每个脚本保留多少个，超出的自动删。
 
-在宿主机上看最新的启动日志：
+在宿主机上看最新的启动日志（需先挂载 `./data:/data`；没挂载时用 `docker exec` 进容器看）：
 
 ```bash
 tail -f "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
@@ -230,7 +302,7 @@ tail -f "$(ls -t data/logs/start/*/*/*/*.log | head -1)"
 | `LOG_MAX_FILES` | `30` | 每个脚本保留的日志文件数 |
 | `LOG_COLOR` | `auto` | `auto` 只在终端上色；`never` 永不上色；`always` 强制上色 |
 
-日志模块不在本仓库，构建时从 `xct258/common` 按提交 SHA 下载（见 `install/app.conf` 的 `LOG_LIB_URL`）。改了上游要同步更新那个 SHA，否则构建的还是旧版本。
+日志模块不在本仓库，构建时从 `xct258/common` 按提交 SHA 下载（见 `install/app.conf` 的 `LOG_LIB_URL`）。改了上游要同步更新那个 SHA，否则构建的还是旧版本。**这个地址不能留空**：留空时镜像里没有 `log.sh`，`template/start.sh` 会打印错误并 `exit 1`，`prepare.sh` / `once.sh` 也无条件 source 它。
 
 ## 环境变量
 
@@ -262,21 +334,22 @@ exec my-server --port "${PORT:-8080}"
 | `INSTALL_7Z` | 快捷安装 7-Zip（`true` / `false`，自动按架构下载最新版） |
 | `PYTHON_PACKAGES` | Python 依赖（pip 包，**一行一个**）；非空时自动安装 Python3 并 pip 安装 |
 | `INSTALL_CUSTOM` | 是否执行 `install/custom-install.sh`（`true` / `false`），构建时执行一次 |
-| `LOG_LIB_URL` | 日志模块 `log.sh` 的下载地址，固定到提交 SHA；留空则镜像里不带日志模块 |
+| `LOG_LIB_URL` | 日志模块 `log.sh` 的下载地址，固定到提交 SHA。**不能留空**：留空则镜像里没有 `log.sh`，容器启动直接失败 |
 
 - `PYTHON_PACKAGES` 非空时会自动安装 `python3`、`pip3`，并提供 `python` 命令
 
-- 多个常驻进程请拆成多个容器，或用进程管理工具；`main.sh` 必须前台运行（`exec`），否则 `docker stop` 无法优雅退出
+- 多个常驻进程请拆成多个容器，或用进程管理工具；`main.sh` 必须前台运行（最后一行 `exec`），`start.sh` 才能把 `SIGTERM` 转发给真正的服务进程并正常重启
 - apt / pip 装不了的东西写进 `install/custom-install.sh`，脚本内可用 `${TARGETARCH}` 区分 `amd64` / `arm64`
 - 项目命名不是 `amd64` / `arm64` 时用脚本里的 `arch_name` 映射，如 `arch_name x64 aarch64`
 - `custom-install.sh` 里装完依赖记得清理临时文件，减小镜像体积
 - 安装器把二进制放进 `$HOME` 下的 `bin` 目录（如 `~/.opencode/bin`、`~/.local/bin`）时，`template/start.sh` 启动时会自动把这些目录加入 `PATH`。因为这些安装器只把 PATH 写进 `~/.bashrc` / `~/.profile`，而容器启动用的是非交互 shell，不会加载它们——不补 PATH 的话 `startup/*.sh` 里会报「命令未找到」
+- 自动补的目录是固定白名单：`~/.local/bin`、`~/bin`、`~/.opencode/bin`、`~/.bun/bin`、`~/.cargo/bin`。其它位置用 `EXTRA_PATH_DIRS` 追加，冒号分隔（如 `EXTRA_PATH_DIRS=/opt/tools/bin:/workspace/bin`）。不会全盘扫描 `$HOME`，避免 `node_modules/.bin` 拖慢启动、遮蔽系统命令
 
 ## 说明
 
 - 构建流水线在 `.github/workflows/build-image.yml`，读取 `install/app.conf` 的配置，通常无需修改
 - 构建前会自动校验：必备文件齐全、`install/` 与 `startup/` 下的脚本语法正确、`DOCKERACC` / `DOCKERPWD` secrets 已配置，校验失败会给出明确错误
-- 构建时不用 `COPY`，而是由 CI 生成 `REPO_URL`（当前提交的 raw 地址，固定在 `github.sha`，避免分支地址的 CDN 缓存拿到旧文件），Dockerfile 用 `wget` 下载 `install/app.conf` / `install/custom-install.sh` / `install/install.sh` 到 `/tmp`（安装完删除）、`startup/*.sh` 到 `/opt/startup`、`template/start.sh` 到 `/opt/start.sh`、`LOG_LIB_URL` 指向的 `log.sh` 到 `/opt/startup/log.sh`（`custom-install.sh` 缺失时自动跳过）
+- 构建时不用 `COPY`，而是由 CI 生成 `REPO_URL`（当前提交的 raw 地址，固定在 `github.sha`，避免分支地址的 CDN 缓存拿到旧文件），Dockerfile 用 `wget` 下载 `install/app.conf` / `install/custom-install.sh` / `install/install.sh` 到 `/tmp`（安装完删除）、`startup/*.sh` 到 `/opt/startup`、`template/start.sh` 到 `/opt/start.sh`、`LOG_LIB_URL` 指向的 `log.sh` 到 `/opt/startup/log.sh`（`custom-install.sh`、`update.sh` 缺失时自动跳过）
 - 构建**完全不使用缓存**（CI 里 `no-cache: true`），每次构建都全新执行，保证 wget 下载到最新文件
 - 因此**仓库需要是公开的**（private 仓库的 raw 地址需要鉴权，wget 无法直接访问）
 - 基础镜像固定为 `xct258/debian-cn`（Debian 系）；要换基础镜像需改 `template/Dockerfile` 的 `FROM`，且新镜像要带 `apt-get`
