@@ -242,9 +242,8 @@ if [ "$UPDATE_INTERVAL_DAYS" -gt 0 ] && [ -f "${DIR}/update.sh" ]; then
     update_loop &
 fi
 
-# 令牌只用于 prepare 配置 git 凭据，不传给 OpenCode。
-# GITHUB_TOKEN / GH_TOKEN 会被 OpenCode 识别为 GitHub Copilot 认证。
-unset GITHUB_TOKEN GH_TOKEN GIT_PUSH_TOKEN
+# 推送令牌只用于 prepare 配置 git 凭据，不传给 OpenCode。
+unset GIT_PUSH_TOKEN
 
 log info "main（prepare/update/once 完成，启动 main.sh）"
 exec bash "${DIR}/main.sh"

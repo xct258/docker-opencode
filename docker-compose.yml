@@ -14,8 +14,8 @@ services:
       # Web 服务端口（host 网络下直接访问宿主机这个端口）
       PORT: 4096
       OPENCODE_PASSWORD: 换成你的密码
-      # Git 推送令牌：有的话启动时配置 git 凭据，容器里可以直接 push
-      # 不要命名为 GITHUB_TOKEN / GH_TOKEN，否则 OpenCode 会把它当成 Copilot 认证
+      # Git 推送令牌：只用于 git push，启动时配置 git 凭据
+      # GITHUB_TOKEN / GH_TOKEN 是 OpenCode 的 Copilot 认证变量，不要拿来配推送
       # GIT_PUSH_TOKEN: ghp_xxx
       # git 提交身份（可选）
       # GIT_USER_NAME: opencode

@@ -367,7 +367,7 @@ start_service() {
       GIT_PUSH_TOKEN: ghp_xxx
 ```
 
-不要使用 `GITHUB_TOKEN` / `GH_TOKEN`。OpenCode 会把这两个变量识别为 GitHub Copilot 认证，自动添加 Copilot 模型。`start.sh` 在启动主进程前也会清掉这些变量，只保留 `~/.git-credentials` 里的推送凭据。
+不要使用 `GITHUB_TOKEN` / `GH_TOKEN` 配置推送。OpenCode 会把这两个变量识别为 GitHub Copilot 认证，自动添加 Copilot 模型。`start.sh` 只清理 `GIT_PUSH_TOKEN`，不会影响专门用于 Copilot 的变量；git 凭据保存在 `~/.git-credentials`。
 
 ## install/app.conf 约定
 
