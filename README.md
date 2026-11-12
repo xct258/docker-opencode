@@ -358,6 +358,17 @@ start_service() {
 
 `docker compose config` 可以直接检查环境变量有没有拼错。
 
+### Git 推送令牌
+
+只用于 `git push` 时使用 `GIT_PUSH_TOKEN`：
+
+```yaml
+    environment:
+      GIT_PUSH_TOKEN: ghp_xxx
+```
+
+不要使用 `GITHUB_TOKEN` / `GH_TOKEN`。OpenCode 会把这两个变量识别为 GitHub Copilot 认证，自动添加 Copilot 模型。`start.sh` 在启动主进程前也会清掉这些变量，只保留 `~/.git-credentials` 里的推送凭据。
+
 ## install/app.conf 约定
 
 | 配置项 | 作用 |

@@ -1,8 +1,10 @@
 #!/bin/bash
 # ============================================================
 # 启动前的准备：每次启动容器都执行（docker restart 也会执行）
-#   检查 GITHUB_TOKEN / GH_TOKEN：
+#   检查 GIT_PUSH_TOKEN（兼容旧变量 GITHUB_TOKEN / GH_TOKEN）：
 #   有的话配置 git 凭据和提交身份，容器里可以直接 clone / push。
+#   注意：GITHUB_TOKEN / GH_TOKEN 会被 OpenCode 当作 GitHub Copilot 认证，
+#         start.sh 会在启动主进程前清掉这些变量，只保留 git 凭据文件。
 #   没设置就跳过，不影响启动。
 # ============================================================
 set -euo pipefail
@@ -10,15 +12,15 @@ set -euo pipefail
 # 日志模块（构建时下载到 /opt/startup/log.sh）
 . "$(dirname "${BASH_SOURCE[0]}")/log.sh"
 
-TOKEN=${GITHUB_TOKEN:-${GH_TOKEN:-}}
+TOKEN=${GIT_PUSH_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}
 
 if [ -z "$TOKEN" ]; then
-    log info "未设置 GITHUB_TOKEN，跳过 git 凭据配置"
+    log info "未设置 GIT_PUSH_TOKEN，跳过 git 凭据配置"
     exit 0
 fi
 
 if ! command -v git >/dev/null 2>&1; then
-    log -f warn "设置了 GITHUB_TOKEN，但镜像里没有 git"
+    log -f warn "设置了 Git 推送令牌，但镜像里没有 git"
     exit 0
 fi
 
@@ -35,4 +37,4 @@ umask 077
 printf 'https://x-access-token:%s@github.com\n' "$TOKEN" > "${HOME:-/root}/.git-credentials"
 chmod 600 "${HOME:-/root}/.git-credentials"
 
-log info "已配置 GitHub 令牌（git push 可用）"
+log info "已配置 Git 推送令牌（git push 可用）"
